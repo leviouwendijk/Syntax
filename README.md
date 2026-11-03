@@ -1,32 +1,21 @@
 # Syntax
 
-A presentation-neutral, typed foundation for describing language constructs and source classifications.
+Canonical, presentation-neutral syntax identities and classified source spans.
 
-`Syntax` does not lex, parse, bind names, emit ANSI, or generate Tree-sitter grammars. Language implementations supply positioned captures from their existing parsers. Consumers project those captures to terminal styles, LSP semantic tokens, macOS attributed text, or editor queries.
+## Source ownership
 
-## Dependencies
+- `Position.Offset<Position.Unit.UTF8>` owns absolute UTF-8 offsets. `SyntaxSourceRange` is a half-open typed range and retains numeric `start`/`end` JSON fields.
+- `Position.TextMap` owns exact UTF-8, UTF-16, UTF-32, Character and line/column conversion. `Syntax` does not maintain a second conversion table.
+- `SyntaxDocument` checks that capture boundaries exist at Unicode-scalar boundaries in its immutable `String` snapshot. Both `\r` and `\n` in CRLF are independently capturable.
+- `Position.TextMap` may reject projection inside CRLF, grapheme clusters, or other unsupported logical boundaries; callers must never round or coerce a failed conversion.
+- A validated textual capture is not a general-purpose raw byte span. Invalid UTF-8 file bytes require a separate raw-source model.
 
-- `Position`: canonical half-open `PositionRange` using Swift `Character` offsets and `LineTable` for source positions.
-- `Primitives`: `Tree` reused through `SyntaxTree` instead of introducing another hierarchy type.
-- `Testing`: lightweight `t_syntax` TestFlows executable.
+## Classification ownership
 
-## Core model
+`SyntaxLanguage` declares typed language constructs; `SyntaxVocabulary` provides runtime language identity. `SyntaxCapture` supports overlapping and discontiguous classifications, zero-width points, layers, roles, modifiers and structured `Primitives.JSONValue` metadata. `Primitives.Tree` remains optional.
 
-- `SyntaxKind`: language-specific typed enum conformance.
-- `SyntaxDefinition`: declared construct and default role.
-- `SyntaxLanguage`: validated language identity and definitions.
-- `SyntaxCapture`: positioned classification with lexical, syntactic, or semantic layer; optional role override and modifiers.
-- `SyntaxDocument`: source and captures; rejects undeclared kinds and out-of-bounds ranges on construction and decoding.
-- `SyntaxTree`: `Primitives.Tree<SyntaxCapture<Kind>>`.
+## Boundaries
 
-Captures may overlap. Layer precedence remains presentation policy. Source text is preserved unmodified, with captures referring to ranges rather than copied or normalized tokens.
+`Syntax` neither lexes nor parses. `Parsing`/language packages recognize source, while terminal, LSP and macOS adapters project classifications. EC should use its lexer's actual token spans rather than including skipped trivia in highlighted ranges. Preserve lexical comments, multiline spans and Unicode fidelity.
 
-## Next passes
-
-1. Adapt Accounting's EC highlighter and LSP semantic tokens to shared classifications without changing compiler semantics.
-2. Add a separate terminal syntax-to-style adapter, with themes outside this package.
-3. Audit existing `Parsing.StructuredParser.Grammar` and `GrammarNode` before introducing portable grammar declarations. Do not duplicate the parser framework.
-4. Add optional Tree-sitter query generation from compatible metadata.
-5. Harden Markdown parsing separately and reuse Syntax classifications for fenced code.
-
-Run `swift run t_syntax` to execute the targeted TestFlows.
+Run `swift run t_syntax` and a debug build before EC integration. `Position` retains its own targeted `t_position` tests; this package verifies the bridge without modifying the dependency.

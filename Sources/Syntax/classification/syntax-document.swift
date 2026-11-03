@@ -1,72 +1,115 @@
 import Position
 
-public enum SyntaxDocumentError: Error, Sendable, Equatable {
-    case unknown_kind(String)
-    case range_out_of_bounds(kind: String, start: Int, end: Int, sourceLength: Int)
-}
-
-/// Source material and independent, potentially overlapping classifications.
-/// Construction establishes that captures belong to the language and source.
-public struct SyntaxDocument<Kind: SyntaxKind>: Sendable, Codable, Hashable {
+/// An immutable source snapshot with typed UTF-8 capture ranges.
+public struct SyntaxDocument: Sendable, Codable, Hashable {
     public let sourceID: String?
     public let source: String
-    public let language: SyntaxLanguage<Kind>
-    public let captures: [SyntaxCapture<Kind>]
+    public let vocabularies: [SyntaxVocabulary]
+    public let captures: [SyntaxCapture]
 
     public init(
         source: String,
-        language: SyntaxLanguage<Kind>,
-        captures: [SyntaxCapture<Kind>],
+        vocabularies: [SyntaxVocabulary],
+        captures: [SyntaxCapture],
         sourceID: String? = nil
     ) throws {
-        let length = source.count
-        let declared = Set(language.definitions.map(\.kind))
+        var declared: Set<SyntaxIdentifier> = []
+        var languages: Set<String> = []
+        for vocabulary in vocabularies {
+            guard languages.insert(vocabulary.id).inserted else {
+                throw SyntaxError.duplicate_language(vocabulary.id)
+            }
+            for definition in vocabulary.definitions {
+                declared.insert(try SyntaxIdentifier(language: vocabulary.id, name: definition.name))
+            }
+        }
 
+        let sourceLength = source.utf8.count
+        var unresolvedBoundaries: Set<Int> = []
         for capture in captures {
             guard declared.contains(capture.kind) else {
-                throw SyntaxDocumentError.unknown_kind(capture.kind.rawValue)
+                throw SyntaxError.unknown_kind(capture.kind)
             }
-            let start = capture.range.start.offset
-            let end = capture.range.end.offset
-            guard start >= 0, end >= start, end <= length else {
-                throw SyntaxDocumentError.range_out_of_bounds(
-                    kind: capture.kind.rawValue,
-                    start: start,
-                    end: end,
-                    sourceLength: length
-                )
+            for range in capture.segments {
+                guard range.end.offset <= sourceLength else {
+                    throw SyntaxError.range_out_of_bounds(
+                        start: range.start.offset,
+                        end: range.end.offset,
+                        source_length: sourceLength
+                    )
+                }
+                unresolvedBoundaries.insert(range.start.offset)
+                unresolvedBoundaries.insert(range.end.offset)
+            }
+        }
+
+        // Validate only the referenced boundaries, without allocating one record
+        // per source scalar. CR and LF are distinct UTF-8 scalar boundaries.
+        unresolvedBoundaries.remove(0)
+        if !unresolvedBoundaries.isEmpty {
+            var offset = 0
+            for scalar in source.unicodeScalars {
+                offset += scalar.utf8.count
+                unresolvedBoundaries.remove(offset)
+                if unresolvedBoundaries.isEmpty { break }
+            }
+            if let invalid = unresolvedBoundaries.min() {
+                throw SyntaxError.unaligned_boundary(offset: invalid)
             }
         }
 
         self.sourceID = sourceID
         self.source = source
-        self.language = language
+        self.vocabularies = vocabularies
         self.captures = captures
+    }
+
+    /// Build once and reuse across a batch of projections.
+    public var textMap: Position.TextMap {
+        Position.TextMap(source: source)
     }
 
     public var lineTable: LineTable {
         LineTable(text: source)
     }
 
-    public func role(for capture: SyntaxCapture<Kind>) -> SyntaxRole? {
-        capture.roleOverride ?? language.definition(for: capture.kind)?.role
+    /// Only Character-aligned spans can be projected to legacy PositionRange.
+    public func positionRange(for range: SyntaxSourceRange) throws -> PositionRange {
+        try textMap.legacyRange(range.offsets)
     }
 
-    public func text(in range: PositionRange) -> Substring? {
-        let lower = range.start.offset
-        let upper = range.end.offset
-        guard lower >= 0, upper >= lower, upper <= source.count else {
+    /// Converts legacy Character spans to canonical typed UTF-8 spans.
+    public func sourceRange(for range: PositionRange) throws -> SyntaxSourceRange {
+        try SyntaxSourceRange(textMap.range(range, as: Position.Unit.UTF8.self))
+    }
+
+    public func roles(for capture: SyntaxCapture) -> [SyntaxRole] {
+        let defaults = vocabularies.first { $0.id == capture.kind.language }?
+            .definition(named: capture.kind.name)?.roles ?? []
+        var result: [SyntaxRole] = []
+        for role in defaults + capture.roles where !result.contains(role) {
+            result.append(role)
+        }
+        return result
+    }
+
+    /// Text is extracted only at scalar boundaries; captures can split graphemes.
+    public func text(in range: SyntaxSourceRange) -> Substring? {
+        guard range.end.offset <= source.utf8.count else { return nil }
+        let utf8 = source.utf8
+        let start = utf8.index(utf8.startIndex, offsetBy: range.start.offset)
+        let end = utf8.index(utf8.startIndex, offsetBy: range.end.offset)
+        guard start.samePosition(in: source.unicodeScalars) != nil,
+              end.samePosition(in: source.unicodeScalars) != nil else {
             return nil
         }
-        let start = source.index(source.startIndex, offsetBy: lower)
-        let end = source.index(source.startIndex, offsetBy: upper)
         return source[start..<end]
     }
 
     private enum CodingKeys: String, CodingKey {
         case sourceID
         case source
-        case language
+        case vocabularies
         case captures
     }
 
@@ -74,17 +117,9 @@ public struct SyntaxDocument<Kind: SyntaxKind>: Sendable, Codable, Hashable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         try self.init(
             source: values.decode(String.self, forKey: .source),
-            language: values.decode(SyntaxLanguage<Kind>.self, forKey: .language),
-            captures: values.decode([SyntaxCapture<Kind>].self, forKey: .captures),
+            vocabularies: values.decode([SyntaxVocabulary].self, forKey: .vocabularies),
+            captures: values.decode([SyntaxCapture].self, forKey: .captures),
             sourceID: values.decodeIfPresent(String.self, forKey: .sourceID)
         )
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var values = encoder.container(keyedBy: CodingKeys.self)
-        try values.encodeIfPresent(sourceID, forKey: .sourceID)
-        try values.encode(source, forKey: .source)
-        try values.encode(language, forKey: .language)
-        try values.encode(captures, forKey: .captures)
     }
 }

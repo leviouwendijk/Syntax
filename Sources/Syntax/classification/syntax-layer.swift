@@ -1,6 +1,8 @@
-/// Classification origin. Different layers may overlap in source.
-public enum SyntaxLayer: String, Sendable, Codable, Hashable {
+/// Classification origin, not a rendering priority or precedence.
+public enum SyntaxLayer: Sendable, Codable, Hashable {
     case lexical
     case syntactic
     case semantic
+    case diagnostic
+    case custom(String)
 }
