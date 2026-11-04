@@ -37,6 +37,32 @@ extension SyntaxTestSuite {
                     1, 0, 2, 0, 0
                 ], "UTF-16 lengths and per-line delta positions")
             }
+            Test("LSP projects captured and rule modifiers") {
+                let lang = try SyntaxLanguage<ECKind>(id: "ec", definitions: [
+                    .init(kind: .entry, role: .keyword)
+                ])
+                let capture = try SyntaxCapture(
+                    language: "ec", kind: ECKind.entry,
+                    segments: [try SyntaxSourceRange(0..<3)], layer: .semantic,
+                    modifiers: [.readonly]
+                )
+                let document = try SyntaxDocument(
+                    source: "key", vocabularies: [lang.vocabulary()], captures: [capture]
+                )
+                let legend = try SyntaxLSP.Legend(
+                    types: ["keyword"], modifiers: ["readonly", "declaration"]
+                )
+                let tokens = try SyntaxLSP.project(document: document, legend: legend, rules: [
+                    .init(selector: .init(role: .keyword), type: "keyword", modifiers: ["declaration"])
+                ])
+                try Expect.equal(SyntaxLSP.encode(tokens), [0, 0, 3, 0, 3], "both modifier bits")
+                let diagnostics = try SyntaxLSP.diagnostics(document: document, values: [
+                    .init(message: "invalid", range: try SyntaxSourceRange(0..<3))
+                ])
+                try Expect.equal(diagnostics[0].start.character, 0, "UTF-16 diagnostic start")
+                try Expect.equal(diagnostics[0].end.character, 3, "UTF-16 diagnostic end")
+            }
+
             Test("unknown semantic legend types are rejected") {
                 let lang = try SyntaxLanguage<ECKind>(id: "ec", definitions: [
                     .init(kind: .entry, role: .keyword)
