@@ -9,6 +9,8 @@ let package = Package(
     ],
     products: [
         .library(name: "Syntax", targets: ["Syntax"]),
+        .library(name: "SyntaxStyling", targets: ["SyntaxStyling"]),
+        .library(name: "SyntaxLSP", targets: ["SyntaxLSP"]),
         .executable(name: "t_syntax", targets: ["SyntaxTests"])
     ],
     dependencies: [
@@ -24,10 +26,23 @@ let package = Package(
                 .product(name: "Primitives", package: "Primitives")
             ]
         ),
+        .target(
+            name: "SyntaxStyling",
+            dependencies: ["Syntax"]
+        ),
+        .target(
+            name: "SyntaxLSP",
+            dependencies: [
+                "Syntax",
+                .product(name: "Position", package: "Position")
+            ]
+        ),
         .executableTarget(
             name: "SyntaxTests",
             dependencies: [
                 "Syntax",
+                "SyntaxStyling",
+                "SyntaxLSP",
                 .product(name: "Position", package: "Position"),
                 .product(name: "Testing", package: "Testing")
             ],

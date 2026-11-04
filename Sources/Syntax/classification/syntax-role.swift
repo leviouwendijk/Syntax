@@ -12,7 +12,7 @@ public enum SyntaxRole: Sendable, Codable, Hashable {
     case number
     case string
     case comment
-    case operator_token
+    case `operator`
     case punctuation
     case text
     case invalid

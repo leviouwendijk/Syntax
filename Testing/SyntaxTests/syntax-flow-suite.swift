@@ -34,6 +34,8 @@ enum SyntaxTestSuite {
     }
 
     static let suite = TestSuite("syntax", title: "Canonical syntax coordinates") {
+        stylingSuite
+        lspSuite
         Test("typed kinds are unique by canonical name") {
             do {
                 _ = try SyntaxLanguage<AliasedKind>(
@@ -220,6 +222,33 @@ enum SyntaxTestSuite {
             try Expect.throwsError("decoded capture cannot bisect scalar") {
                 _ = try JSONDecoder().decode(SyntaxDocument.self, from: malformed)
             }
+        }
+
+        Test("projection preserves CRLF, overlaps and unclassified gaps") {
+            let vocabulary = try SyntaxLanguage<ECKind>(id: "ec", definitions: [
+                .init(kind: .entry, role: .keyword),
+                .init(kind: .identifier, role: .identifier)
+            ])
+            let broad = try SyntaxCapture(
+                language: "ec", kind: ECKind.entry,
+                segments: [try SyntaxSourceRange(0..<3)], layer: .lexical
+            )
+            let inner = try SyntaxCapture(
+                language: "ec", kind: ECKind.identifier,
+                segments: [try SyntaxSourceRange(1..<2), try SyntaxSourceRange(4..<4)],
+                layer: .semantic
+            )
+            let document = try SyntaxDocument(
+                source: "abc\r\nd", vocabularies: [vocabulary.vocabulary()],
+                captures: [broad, inner]
+            )
+            let projection = try SyntaxProjection(document: document)
+            try Expect.equal(projection.lines.count, 2, "two physical source lines")
+            try Expect.equal(projection.lines[0].runs.map { $0.captures.count }, [1, 2, 1], "overlap retained")
+            try Expect.equal(projection.lines[0].terminator.length, 2, "CRLF retained separately")
+            try Expect.equal(projection.lines[1].runs[0].captures.count, 0, "unclassified content retained")
+            try Expect.equal(projection.points.map(\.offset), [4], "zero-width point preserved")
+            try Expect.equal(SyntaxSelector(role: .identifier).matches(inner, in: document), true, "role matches")
         }
 
         Test("zero-width, discontinuous and tree-backed captures remain supported") {
